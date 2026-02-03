@@ -4,7 +4,7 @@
 ## Overview
 
 This script is to be executed **locally using GitHub CLI** to create GitHub issues across repositories in a GitHub organization.  
-These issues act as **triggers for the Veracode Workflow App**, initiating scans based on each repository’s `veracode.yml` configuration.
+These issues act as **triggers for the Veracode Workflow App**, initiating scans based on each repository's `veracode.yml` configuration.
 
 The script is safe, idempotent, and auditable.
 
@@ -31,6 +31,7 @@ For each repository in the specified GitHub organization, the script:
 - It does not modify source code
 - It does not create issues in archived repositories
 - It does not permanently change repository settings
+- It does not permanently delete issues (closes them instead)
 
 ---
 
@@ -106,7 +107,9 @@ chmod +x veracode_trigger.sh
 
 ## Running the Script
 
-Run the script with the GitHub organization name:
+### Trigger Scans / Create Issues Mode (Default)
+
+Run the script with the GitHub organization name to create trigger issues:
 
 ```bash
 ./veracode_trigger.sh <github-org-name>
@@ -117,19 +120,36 @@ Example:
 ./veracode_trigger.sh my-github-org
 ```
 
+### Delete Issues Mode
+
+Run the script with the `--delete` flag to remove previously created trigger issues:
+
+```bash
+./veracode_trigger.sh --delete <github-org-name>
+```
+
+Example:
+```bash
+./veracode_trigger.sh --delete my-github-org
+```
+
+### Usage Help
+
+Display usage information:
+
+```bash
+./veracode_trigger.sh
+```
+
 ---
 
 ## Output
-
-### Console Output
-- Per-repository processing logs
-- Execution summary
 
 ### CSV Report
 
 A file named `vcbaseline.csv` is generated in the working directory.
 
-Fields:
+#### Create Mode Fields:
 - `repo`
 - `primary_language`
 - `issues_enabled`
@@ -143,6 +163,19 @@ Common `action` values:
 - `skipped_cant_enable_issues`
 - `failed_create`
 
+#### Delete Mode Fields:
+- `repo`
+- `primary_language`
+- `is_archived`
+- `issues_deleted`
+- `action`
+
+Common `action` values:
+- `deleted`
+- `partial_delete`
+- `no_issues_found`
+- `skipped_archived`
+
 The CSV serves as the execution audit trail.
 
 ---
@@ -152,7 +185,8 @@ The CSV serves as the execution audit trail.
 The script checks for an **open issue with the same title** before creating a new one.
 
 To re-trigger scans:
-- Close the existing issue, or
+- Use the `--delete` flag to clean up existing issues, then run in create mode again
+- Close the existing issue manually, or
 - Update the issue title in the script
 
 ---
@@ -163,3 +197,27 @@ To re-trigger scans:
 - Organization-wide scan triggering
 - Periodic re-scans
 - Local DevSecOps automation
+- Cleanup of trigger issues after scan completion
+
+---
+
+## Common Workflows
+
+### Initial Scan Trigger
+```bash
+./veracode_trigger.sh my-github-org
+```
+
+### Cleanup After Scans Complete
+```bash
+./veracode_trigger.sh --delete my-github-org
+```
+
+### Re-trigger All Scans
+```bash
+# First, clean up existing issues
+./veracode_trigger.sh --delete my-github-org
+
+# Then, create new trigger issues
+./veracode_trigger.sh my-github-org
+```
