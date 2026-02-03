@@ -73,7 +73,7 @@ If the user cannot enable Issues on a repository, the script will safely skip is
 
 ## Veracode Workflow App Configuration (Required)
 
-For issue-based triggers to work, each target repository **must allow issue triggers** in `veracode.yml`.
+For issue-based triggers to work, each target repository **must allow issue triggers** in `veracode.yml` for each of the desired scan types (SAST, SCA, IaC).
 
 ### Required `veracode.yml` Configuration
 
