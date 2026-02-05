@@ -5,18 +5,35 @@ set -o pipefail
 OUTPUT_FILE="vcbaseline.csv"
 > "$OUTPUT_FILE"
 
-ORG="${1:-}"
+ORG=""
+DELETE_MODE=false
 ISSUE_TITLE="Veracode Baseline Scans"
 ISSUE_BODY="Veracode All Scans"
 
-BASE_JITTER_MS=100
-MAX_JITTER_MS=400
-CREATE_SLEEP_MS_MIN=400
-CREATE_SLEEP_MS_MAX=900
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --delete)
+      DELETE_MODE=true
+      shift
+      ;;
+    *)
+      ORG="$1"
+      shift
+      ;;
+  esac
+done
 
 # Has the org name been provided as a parameter
 if [[ -z "$ORG" ]]; then
-  echo "Usage: $0 <github-org-name>"
+  echo "Usage: $0 [--delete] <github-org-name>"
+  echo ""
+  echo "Options:"
+  echo "  --delete    Delete existing issues with title '$ISSUE_TITLE'"
+  echo ""
+  echo "Examples:"
+  echo "  $0 my-org              # Create issues"
+  echo "  $0 --delete my-org     # Delete issues"
   exit 1
 fi
 
@@ -33,6 +50,104 @@ if ! gh api "orgs/$ORG" --silent >/dev/null 2>&1; then
   exit 1
 fi
 
+# DELETE MODE
+if [[ "$DELETE_MODE" == true ]]; then
+  echo "================================================================"
+  echo "DELETE MODE: Removing issues with title '$ISSUE_TITLE'"
+  echo "================================================================"
+  echo ""
+  
+  total_repos=0
+  deleted_count=0
+  skipped_no_issues=0
+  failed_delete_count=0
+  archived_count=0
+  
+  printf "repo,primary_language,is_archived,issues_deleted,action\n" >> "$OUTPUT_FILE"
+  
+  while IFS=$'\t' read -r name_with_owner issues_enabled primary_lang is_archived; do
+    echo "-------------------------------------------"
+    echo "Processing $name_with_owner"
+    total_repos=$((total_repos + 1))
+    
+    if [[ "$is_archived" == "true" ]]; then
+      archived_count=$((archived_count + 1))
+      echo "Repository is archived. Skipping."
+      echo "$name_with_owner,$primary_lang,$is_archived,0,skipped_archived" >> "$OUTPUT_FILE"
+      continue
+    fi
+    
+    # Find all open issues with matching title
+    issue_numbers=$(
+      gh issue list \
+        --repo "$name_with_owner" \
+        --state open \
+        --search "$ISSUE_TITLE in:title" \
+        --json number \
+        --jq '.[].number' 2>/dev/null || true
+    )
+    
+    if [[ -z "$issue_numbers" ]]; then
+      echo "No matching issues found."
+      skipped_no_issues=$((skipped_no_issues + 1))
+      echo "$name_with_owner,$primary_lang,$is_archived,0,no_issues_found" >> "$OUTPUT_FILE"
+      continue
+    fi
+    
+    issues_deleted=0
+    issues_failed=0
+    
+    while IFS= read -r issue_num; do
+      if [[ -n "$issue_num" ]]; then
+        echo "Deleting issue #$issue_num..."
+        if gh issue close "$issue_num" --repo "$name_with_owner" --comment "Closed by cleanup script" >/dev/null 2>&1; then
+          issues_deleted=$((issues_deleted + 1))
+          deleted_count=$((deleted_count + 1))
+        else
+          echo "Failed to delete issue #$issue_num"
+          issues_failed=$((issues_failed + 1))
+          failed_delete_count=$((failed_delete_count + 1))
+        fi
+      fi
+    done <<< "$issue_numbers"
+    
+    if [[ $issues_failed -gt 0 ]]; then
+      action="partial_delete"
+    else
+      action="deleted"
+    fi
+    
+    echo "$name_with_owner,$primary_lang,$is_archived,$issues_deleted,$action" >> "$OUTPUT_FILE"
+    
+  done < <(
+    gh repo list "$ORG" \
+      --limit 1000 \
+      --json nameWithOwner,hasIssuesEnabled,primaryLanguage,isArchived \
+      --jq '.[] | [
+        .nameWithOwner,
+        (.hasIssuesEnabled|tostring),
+        (.primaryLanguage.name // "N/A"),
+        (.isArchived|tostring)
+      ] | @tsv'
+  )
+  
+  echo ""
+  echo "Finished deleting issues."
+  echo ""
+  echo "Delete Stats for Organization: $ORG"
+  echo "----------------------------------------------------------------"
+  echo "Total Repositories: $total_repos"
+  echo "Archived Repositories: $archived_count"
+  echo "Repositories with No Issues: $skipped_no_issues"
+  echo "Issues Deleted: $deleted_count"
+  echo "Failed Deletes: $failed_delete_count"
+  echo "CSV Output: $OUTPUT_FILE"
+  echo "----------------------------------------------------------------"
+  
+  exit 0
+fi
+
+# CREATE MODE 
 total_count=0
 iac_count=0
 archived_count=0
@@ -44,12 +159,9 @@ failed_count=0
 
 printf "repo,primary_language,issues_enabled,is_archived,action\n" >> "$OUTPUT_FILE"
 
-# 1. Fetch repositories as TSV (reliable parsing)
+# 1. Fetch repositories as TSV
 # 2. Iterate using a while loop
 while IFS=$'\t' read -r name_with_owner issues_enabled primary_lang is_archived; do
-  jitter_ms=$((BASE_JITTER_MS + (RANDOM % (MAX_JITTER_MS - BASE_JITTER_MS + 1))))
-  sleep "0.$(printf '%03d' "$jitter_ms")"
-
   echo "-------------------------------------------"
   echo "Processing $name_with_owner"
   total_count=$((total_count + 1))
@@ -100,9 +212,6 @@ while IFS=$'\t' read -r name_with_owner issues_enabled primary_lang is_archived;
     echo "$name_with_owner,$primary_lang,$issues_enabled,$is_archived,skipped_existing_issue" >> "$OUTPUT_FILE"
     continue
   fi
-
-  create_sleep_ms=$((CREATE_SLEEP_MS_MIN + (RANDOM % (CREATE_SLEEP_MS_MAX - CREATE_SLEEP_MS_MIN + 1))))
-  sleep "0.$(printf '%03d' "$create_sleep_ms")"
 
   echo "Creating issue..."
   if gh issue create --repo "$name_with_owner" --title "$ISSUE_TITLE" --body "$ISSUE_BODY" >/dev/null 2>&1; then
