@@ -4,7 +4,7 @@
 ## Overview
 
 This script is to be executed **locally using GitHub CLI** to create GitHub issues across repositories in a GitHub organization.  
-These issues act as **triggers for the Veracode Workflow App**, initiating scans based on each repository's `veracode.yml` configuration.
+These issues act as **triggers for the Veracode Workflow App**, initiating scans based on the `veracode.yml` configuration.
 
 The script is safe, idempotent, and auditable.
 
