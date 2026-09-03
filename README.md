@@ -9,7 +9,7 @@ Creates or closes GitHub issues across repositories in one or more GitHub organi
 For each repository in the target organization, the script:
 
 1. Skips archived repositories
-2. Optionally filters repos by name list (`--repo-file`) or wildcard pattern (`--repo-wildcard`)
+2. Optionally filters repos by org/repo combination (`--org-repo-file`), name list (`--repo-file`), or wildcard pattern (`--repo-wildcard`)
 3. Optionally skips repos that already have a Veracode application profile on the platform (`--veracode-skip-existing`)
 4. Optionally checks for recent Veracode scans and skips repos scanned within N days (`--stale-days`)
 5. Temporarily enables Issues if disabled (restores original state after)
@@ -49,6 +49,9 @@ python script.py my-github-org
 
 # Multiple orgs
 python script.py --org-file orgs.txt
+
+# Specific org/repo combinations
+python script.py --org-repo-file org_repos.csv
 
 # Specific repos
 python script.py --repo-file repos.txt my-github-org
@@ -148,9 +151,10 @@ The command value must exactly match the Workflow App command name. This mismatc
 | Flag | Description |
 |------|-------------|
 | `org` | Single org name (positional argument) |
-| `--org-file FILE` | Text file with one org per line. `#` and blank lines ignored. Mutually exclusive with the positional org. |
-| `--repo-file FILE` | Text file with one repo name per line (no org prefix). Mutually exclusive with `--repo-wildcard`. |
-| `--repo-wildcard PATTERN` | Wildcard filter, case-insensitive. Mutually exclusive with `--repo-file`. |
+| `--org-file FILE` | Text file with one org per line. `#` and blank lines ignored. Mutually exclusive with the positional org and `--org-repo-file`. |
+| `--org-repo-file FILE` | CSV file with 2 columns: `org` and `repo`. Supports quoted values. Targets only the listed org/repo combinations. `#` and blank lines ignored. Mutually exclusive with the positional org, `--org-file`, `--repo-file` and `--repo-wildcard`. See [Org-Repo Filtering](#org-repo-filtering). |
+| `--repo-file FILE` | Text file with one repo name per line (no org prefix). Mutually exclusive with `--repo-wildcard` and `--org-repo-file`. |
+| `--repo-wildcard PATTERN` | Wildcard filter, case-insensitive. Mutually exclusive with `--repo-file` and `--org-repo-file`. |
 | `--delete` | Close previously created trigger issues instead of creating new ones |
 | `--dry-run` | Report what would happen. Makes no writes of any kind. Works in create and delete mode. |
 | `--stale-days N` | Only create issues for repos not scanned in the last N days. Disabled by default. `0` disables. Ignored in delete mode. |
@@ -265,6 +269,53 @@ Case-insensitive. `#` and blank lines ignored.
 Case-insensitive, applied to the repo name only, not the org prefix.
 
 Both filters combine with `--stale-days`, `--veracode-skip-existing`, `--workers` and `--delete`.
+
+---
+
+## Org-Repo Filtering
+
+Use `--org-repo-file` to target specific org/repo combinations without maintaining a separate `--repo-file` list per org. Useful when you want to run across multiple orgs but only on a subset of repositories in each.
+
+### Filter by org/repo combination (`--org-repo-file`)
+
+Create a CSV file with 2 columns, `org` and `repo`:
+
+```csv
+# org_repos.csv
+# Comments start with #
+my-org,api-service
+my-org,frontend-app
+other-org,backend-api
+other-org,shared-lib
+third-org,core-lib
+```
+
+Quoted values are supported:
+
+```csv
+"my-org","api-service"
+"my-org","frontend-app"
+"other-org","backend-api"
+```
+
+```bash
+python script.py --org-repo-file org_repos.csv
+```
+
+The org list is derived from the file, so no positional org or `--org-file` is needed (and neither is allowed alongside it). Matching is case-insensitive. Lines starting with `#` and blank lines are ignored. The file is read with Python's CSV reader with quote support, so values containing special characters can be quoted safely.
+
+Combines with `--stale-days`, `--veracode-skip-existing`, `--workers` and `--delete`:
+
+```bash
+# Only listed org/repo combinations not scanned in 30 days, 10 workers
+python script.py --org-repo-file org_repos.csv --stale-days 30 --workers 10
+
+# Skip repos with existing Veracode profiles
+python script.py --org-repo-file org_repos.csv --veracode-skip-existing
+
+# Close issues only on the listed org/repo combinations
+python script.py --delete --org-repo-file org_repos.csv
+```
 
 ---
 
@@ -424,6 +475,15 @@ To re-trigger scans:
 
 - **"Cannot access the following org(s)" on startup**
   - Typo, or the token lacks access. No changes are made until every org is confirmed.
+
+- **"Expected 2 columns (org, repo)" when using --org-repo-file**
+  - A line has the wrong number of comma-separated columns. Each line must have exactly 2.
+
+- **"org and repo cannot be empty" when using --org-repo-file**
+  - One column is empty or whitespace only. Both values must be non-empty.
+
+- **"No org-repo pairs found" when using --org-repo-file**
+  - Every line is blank or starts with `#`. Add at least one uncommented pair.
 
 - **"Invalid org name(s)" / "Invalid repo name(s)"**
   - Org names: alphanumeric and hyphens, must start and end alphanumeric, max 39 chars. Repo names: alphanumeric, hyphen, underscore, period, plus glob characters.
