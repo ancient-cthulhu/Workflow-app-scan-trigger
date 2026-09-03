@@ -119,6 +119,10 @@ class RepoFileError(Exception):
     pass
 
 
+class OrgRepoFileError(Exception):
+    pass
+
+
 class VeracodeError(Exception):
     pass
 
@@ -445,6 +449,38 @@ def load_repos_from_file(file_path: str) -> list[str]:
     if invalid:
         raise RepoFileError(f"Invalid repo name(s) in '{file_path}': {', '.join(invalid)}")
     return repos
+
+
+def load_org_repos_from_file(file_path: str) -> list[tuple[str, str]]:
+    if not os.path.isfile(file_path):
+        raise OrgRepoFileError(f"Org-repo file not found: {file_path}")
+
+    pairs: list[tuple[str, str]] = []
+    with open(file_path, encoding="utf-8") as fh:
+        reader = csv.reader(fh, quotechar='"', skipinitialspace=True)
+        line_num = 0
+        for row in reader:
+            line_num += 1
+            if not row or (len(row) == 1 and not row[0].strip()):
+                continue
+            if row[0].lstrip().startswith("#"):
+                continue
+            if len(row) != 2:
+                raise OrgRepoFileError(
+                    f"Line {line_num}: Expected 2 columns (org, repo), got {len(row)}"
+                )
+            org, repo = row[0].strip(), row[1].strip()
+            if not org or not repo:
+                raise OrgRepoFileError(f"Line {line_num}: org and repo cannot be empty")
+            if not validate_org_name(org):
+                raise OrgRepoFileError(f"Line {line_num}: Invalid org name: {org!r}")
+            if not validate_repo_name(repo):
+                raise OrgRepoFileError(f"Line {line_num}: Invalid repo name: {repo!r}")
+            pairs.append((org, repo))
+
+    if not pairs:
+        raise OrgRepoFileError(f"No org-repo pairs found in '{file_path}'")
+    return pairs
 
 
 def filter_repos_by_names(repos: list[dict], target_names: list[str]) -> list[dict]:
@@ -1445,6 +1481,11 @@ def main() -> None:
         metavar="FILE",
         help="Text file with one org name per line",
     )
+    org_group.add_argument(
+        "--org-repo-file",
+        metavar="FILE",
+        help="CSV file with 2 columns (org, repo) to trigger scans for specific org/repo combinations",
+    )
 
     repo_filter_group = parser.add_mutually_exclusive_group()
     repo_filter_group.add_argument(
@@ -1586,6 +1627,10 @@ def main() -> None:
         sys.exit("Error: --min-remaining must be >= 0")
     if args.rl_check_every < 1:
         sys.exit("Error: --rl-check-every must be >= 1")
+    if args.org_repo_file and (args.repo_file or args.repo_wildcard):
+        sys.exit(
+            "Error: --org-repo-file cannot be combined with --repo-file or --repo-wildcard"
+        )
     if args.delete and args.stale_days is not None:
         print("Warning: --stale-days is ignored in delete mode.", file=sys.stderr)
 
@@ -1646,7 +1691,16 @@ def main() -> None:
         repo_filter_pattern = args.repo_wildcard
         print(f"Using repo wildcard filter: '{repo_filter_pattern}'")
 
-    if args.org_file:
+    org_repo_pairs: list[tuple[str, str]] | None = None
+    if args.org_repo_file:
+        try:
+            org_repo_pairs = load_org_repos_from_file(args.org_repo_file)
+        except OrgRepoFileError as exc:
+            sys.exit(f"Error: {exc}")
+        print(f"Loaded {len(org_repo_pairs)} org-repo pair(s) from '{args.org_repo_file}'.")
+        orgs = list(dict.fromkeys(org for org, _ in org_repo_pairs))
+        print(f"Targeting {len(orgs)} org(s) from '{args.org_repo_file}'.")
+    elif args.org_file:
         try:
             orgs = load_orgs_from_file(args.org_file)
         except OrgFileError as exc:
@@ -1742,7 +1796,11 @@ def main() -> None:
                     continue
 
                 original_count = len(repos)
-                if repo_filter_names:
+                if org_repo_pairs:
+                    target_repos = [repo for o, repo in org_repo_pairs if o == org]
+                    repos = filter_repos_by_names(repos, target_repos)
+                    print(f"Filtered to {len(repos)}/{original_count} repos from --org-repo-file for '{org}'")
+                elif repo_filter_names:
                     repos = filter_repos_by_names(repos, repo_filter_names)
                     print(f"Filtered to {len(repos)}/{original_count} repos matching --repo-file")
                 elif repo_filter_pattern:
